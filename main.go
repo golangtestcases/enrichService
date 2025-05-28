@@ -1,16 +1,20 @@
 package main
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"os"
 	_ "people-service/docs"
+	"people-service/internal/api"
 	"people-service/internal/db"
 	"people-service/internal/enrich"
 	"people-service/internal/models"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/go-playground/validator/v10"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 
@@ -18,31 +22,43 @@ import (
 	"gorm.io/gorm"
 )
 
-// @title People Service API
-// @version 1.0
-// @description API для управления данными людей с обогащением из внешних источников
-
-// @host localhost:8080
-// @BasePath /
-
-// @securityDefinitions.apikey ApiKeyAuth
-// @in header
-// @name Authorization
-var dbConn *gorm.DB
+var (
+	dbConn   *gorm.DB
+	validate *validator.Validate
+)
 
 func main() {
-
 	// Инициализация Redis
-	redisHost := os.Getenv("REDIS_HOST")
-	if redisHost == "" {
-		redisHost = "redis"
-	}
-
-	if err := enrich.InitRedis(redisHost + ":6379"); err != nil {
+	if err := initRedis(); err != nil {
 		log.Fatalf("Failed to connect to Redis: %v", err)
 	}
 
 	// Подключение к БД
+	if err := initDatabase(); err != nil {
+		log.Fatal("Failed to connect to database:", err)
+	}
+
+	// Инициализация валидатора
+	validate = validator.New()
+
+	// Роутер
+	r := setupRouter()
+
+	log.Println("Server running on :8080")
+	if err := http.ListenAndServe(":8080", r); err != nil {
+		log.Fatal("Server failed:", err)
+	}
+}
+
+func initRedis() error {
+	redisHost := os.Getenv("REDIS_HOST")
+	if redisHost == "" {
+		redisHost = "redis"
+	}
+	return enrich.InitRedis(redisHost + ":6379")
+}
+
+func initDatabase() error {
 	var err error
 	for i := 0; i < 5; i++ {
 		dbConn, err = db.InitDB()
@@ -52,27 +68,32 @@ func main() {
 		log.Printf("DB connection attempt %d failed: %v", i+1, err)
 		time.Sleep(5 * time.Second)
 	}
+
 	if err != nil {
-		log.Fatal("Failed to connect to database:", err)
+		return err
 	}
 
 	// Миграции
 	if err := dbConn.AutoMigrate(&models.Person{}); err != nil {
-		log.Fatal("Migration failed:", err)
+		log.Printf("Migration error: %v", err)
+		return err
 	}
+	return nil
 
-	// Роутер
+}
+
+func setupRouter() *gin.Engine {
 	r := gin.Default()
+
+	r.Use(api.ErrorMiddleware())
+
 	r.POST("/people", createPerson)
 	r.GET("/people", getPeople)
 	r.PUT("/people/:id", updatePerson)
 	r.DELETE("/people/:id", deletePerson)
-
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
-	log.Println("Server running on :8080")
-	if err := http.ListenAndServe(":8080", r); err != nil {
-		log.Fatal("Server failed:", err)
-	}
+
+	return r
 }
 
 // @Summary Добавить человека
@@ -82,23 +103,47 @@ func main() {
 // @Produce json
 // @Param input body models.Person true "Данные человека"
 // @Success 201 {object} models.Person
-// @Failure 400 {object} map[string]string
-// @Failure 500 {object} map[string]string
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
 // @Router /people [post]
 func createPerson(c *gin.Context) {
 	var person models.Person
 	if err := c.ShouldBindJSON(&person); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		api.HandleError(c, api.NewError(
+			api.ErrorTypeValidation,
+			http.StatusBadRequest,
+			"Invalid request body",
+			err.Error(),
+		))
+		return
+	}
+
+	if err := validate.Struct(person); err != nil {
+		api.HandleError(c, err)
 		return
 	}
 
 	if err := person.Enrich(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to enrich data: " + err.Error()})
+		api.HandleError(c, api.NewError(
+			api.ErrorTypeExternal,
+			http.StatusFailedDependency,
+			"Failed to enrich data",
+			err.Error(),
+		))
 		return
 	}
 
 	if err := dbConn.Create(&person).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		if strings.Contains(err.Error(), "duplicate key") {
+			api.HandleError(c, api.NewError(
+				api.ErrorTypeConflict,
+				http.StatusConflict,
+				"Person already exists",
+				nil,
+			))
+		} else {
+			api.HandleError(c, api.ErrDBOperation)
+		}
 		return
 	}
 
@@ -106,7 +151,7 @@ func createPerson(c *gin.Context) {
 }
 
 // @Summary Получить список людей
-// @Description Возвращает список с возможностью фильтрации и пагинации
+// @Description Возвращает список с возможностью фильтрации и пагинацией
 // @Tags people
 // @Accept json
 // @Produce json
@@ -114,69 +159,39 @@ func createPerson(c *gin.Context) {
 // @Param surname query string false "Фильтр по фамилии"
 // @Param age query int false "Фильтр по возрасту"
 // @Param gender query string false "Фильтр по полу"
+// @Param nationality query string false "Фильтр по национальности"
 // @Param page query int false "Номер страницы" default(1)
 // @Param limit query int false "Лимит записей" default(10)
-// @Success 200 {object} map[string]interface{}
-// @Failure 500 {object} map[string]string
+// @Success 200 {object} models.PeopleListResponse
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
 // @Router /people [get]
 func getPeople(c *gin.Context) {
-	var people []models.Person
-	query := dbConn.Model(&models.Person{})
-
-	// Фильтрация по query-параметрам
-	if name := c.Query("name"); name != "" {
-		query = query.Where("name ILIKE ?", "%"+name+"%") // Поиск по частичному совпадению
-	}
-	if surname := c.Query("surname"); surname != "" {
-		query = query.Where("surname ILIKE ?", "%"+surname+"%")
-	}
-	if age := c.Query("age"); age != "" {
-		query = query.Where("age = ?", age)
-	}
-	if gender := c.Query("gender"); gender != "" {
-		query = query.Where("gender = ?", gender)
-	}
-
-	// Пагинация
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	if page < 1 {
-		page = 1
-	}
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
-	offset := (page - 1) * limit
-
-	if err := query.Offset(offset).Limit(limit).Find(&people).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	var filter models.PersonFilter
+	if err := c.ShouldBindQuery(&filter); err != nil {
+		api.HandleError(c, api.NewError(
+			api.ErrorTypeValidation,
+			http.StatusBadRequest,
+			"Invalid query parameters",
+			err.Error(),
+		))
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"data":  people,
-		"page":  page,
-		"limit": limit,
-	})
-}
-
-func updatePerson(c *gin.Context) {
-	id := c.Param("id")
-	var person models.Person
-
-	if err := dbConn.First(&person, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Person not found"})
+	people, total, err := models.GetPeople(dbConn, filter)
+	if err != nil {
+		api.HandleError(c, api.ErrDBOperation)
 		return
 	}
 
-	if err := c.ShouldBindJSON(&person); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+	response := models.PeopleListResponse{
+		Data:  people,
+		Total: total,
+		Page:  filter.Page,
+		Limit: filter.Limit,
 	}
 
-	if err := dbConn.Save(&person).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, person)
+	c.JSON(http.StatusOK, response)
 }
 
 // @Summary Обновить данные человека
@@ -186,24 +201,86 @@ func updatePerson(c *gin.Context) {
 // @Param id path int true "ID человека"
 // @Param input body models.Person true "Обновленные данные"
 // @Success 200 {object} models.Person
-// @Failure 400 {object} map[string]string
-// @Failure 404 {object} map[string]string
-// @Failure 500 {object} map[string]string
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
 // @Router /people/{id} [put]
+func updatePerson(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		api.HandleError(c, api.NewError(
+			api.ErrorTypeValidation,
+			http.StatusBadRequest,
+			"Invalid ID format",
+			nil,
+		))
+		return
+	}
+
+	var person models.Person
+	if err := dbConn.First(&person, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			api.HandleError(c, api.ErrNotFound)
+		} else {
+			api.HandleError(c, api.ErrDBOperation)
+		}
+		return
+	}
+
+	if err := c.ShouldBindJSON(&person); err != nil {
+		api.HandleError(c, api.NewError(
+			api.ErrorTypeValidation,
+			http.StatusBadRequest,
+			"Invalid request body",
+			err.Error(),
+		))
+		return
+	}
+
+	if err := validate.Struct(person); err != nil {
+		api.HandleError(c, err)
+		return
+	}
+
+	if err := dbConn.Save(&person).Error; err != nil {
+		api.HandleError(c, api.ErrDBOperation)
+		return
+	}
+
+	c.JSON(http.StatusOK, person)
+}
+
+// @Summary Удалить человека
+// @Tags people
+// @Accept json
+// @Produce json
+// @Param id path int true "ID человека"
+// @Success 200 {object} map[string]string
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Router /people/{id} [delete]
 func deletePerson(c *gin.Context) {
-	id := c.Param("id")
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		api.HandleError(c, api.NewError(
+			api.ErrorTypeValidation,
+			http.StatusBadRequest,
+			"Invalid ID format",
+			nil,
+		))
+		return
+	}
 
 	result := dbConn.Delete(&models.Person{}, id)
-
 	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
+		api.HandleError(c, api.ErrDBOperation)
 		return
 	}
 
 	if result.RowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Person not found"})
+		api.HandleError(c, api.ErrNotFound)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Person deleted"})
+	c.JSON(http.StatusOK, gin.H{"message": "Person deleted successfully"})
 }

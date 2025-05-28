@@ -1,0 +1,226 @@
+{
+  "info": {
+    "name": "People Service API",
+    "description": "Тестирование сервиса для работы с данными людей",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Добавление нового человека",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Dmitriy\",\n  \"surname\": \"Ushakov\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/people",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["people"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Добавление с необязательным полем (patronymic)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Anna\",\n  \"surname\": \"Ivanova\",\n  \"patronymic\": \"Sergeevna\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/people",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["people"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Ошибка валидации (пустое имя)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"\",\n  \"surname\": \"Petrov\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/people",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["people"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Получение списка (с пагинацией)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/people?page=1&limit=2",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["people"],
+          "query": [
+            {
+              "key": "page",
+              "value": "1"
+            },
+            {
+              "key": "limit",
+              "value": "2"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Фильтрация по возрасту",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/people?age=30",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["people"],
+          "query": [
+            {
+              "key": "age",
+              "value": "30"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Фильтрация по полу",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/people?gender=male",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["people"],
+          "query": [
+            {
+              "key": "gender",
+              "value": "male"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Обновление данных",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Dmitriy\",\n  \"surname\": \"Ushakov\",\n  \"age\": 31\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/people/1",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["people", "1"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Ошибка при обновлении (неверный ID)",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Dmitriy\",\n  \"surname\": \"Ushakov\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/people/999",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["people", "999"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Удаление человека",
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/people/1",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["people", "1"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Ошибка при удалении (несуществующий ID)",
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/people/999",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["people", "999"]
+        }
+      },
+      "response": []
+    }
+  ]
+}
