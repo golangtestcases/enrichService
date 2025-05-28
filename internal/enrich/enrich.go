@@ -11,6 +11,15 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+//Используем внешние API (agify.io, genderize.io, nationalize.io)
+//и кеширует результаты в Redis для повышения производительности.
+
+//Основные возможности:
+// - Получение возраста по имени (GetAge)
+// - Определение пола по имени (GetGender)
+// - Определение национальности по имени (GetNationality)
+// - Автоматическое кеширование результатов на 24 часа
+
 var (
 	RedisClient *redis.Client
 	ctx         = context.Background()

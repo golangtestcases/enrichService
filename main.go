@@ -123,7 +123,7 @@ func getPeople(c *gin.Context) {
 	var people []models.Person
 	query := dbConn.Model(&models.Person{})
 
-	// 1. Фильтрация по query-параметрам
+	// Фильтрация по query-параметрам
 	if name := c.Query("name"); name != "" {
 		query = query.Where("name ILIKE ?", "%"+name+"%") // Поиск по частичному совпадению
 	}
@@ -137,7 +137,7 @@ func getPeople(c *gin.Context) {
 		query = query.Where("gender = ?", gender)
 	}
 
-	// 2. Пагинация
+	// Пагинация
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	if page < 1 {
 		page = 1
@@ -145,13 +145,11 @@ func getPeople(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
 	offset := (page - 1) * limit
 
-	// 3. Выполняем запрос
 	if err := query.Offset(offset).Limit(limit).Find(&people).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// 4. Возвращаем результат
 	c.JSON(http.StatusOK, gin.H{
 		"data":  people,
 		"page":  page,
@@ -159,25 +157,20 @@ func getPeople(c *gin.Context) {
 	})
 }
 
-//Обновление существующей записи
-
 func updatePerson(c *gin.Context) {
-	id := c.Param("id") // Получаем ID из URL
+	id := c.Param("id")
 	var person models.Person
 
-	// 1. Находим запись в БД
 	if err := dbConn.First(&person, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Person not found"})
 		return
 	}
 
-	// 2. Парсим обновленные данные из JSON
 	if err := c.ShouldBindJSON(&person); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// 3. Сохраняем обновленные данные
 	if err := dbConn.Save(&person).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
