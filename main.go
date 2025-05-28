@@ -4,18 +4,34 @@ import (
 	"log"
 	"net/http"
 	"os"
+	_ "people-service/docs"
 	"people-service/internal/db"
 	"people-service/internal/enrich"
 	"people-service/internal/models"
+	"strconv"
 	"time"
+
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
+// @title People Service API
+// @version 1.0
+// @description API для управления данными людей с обогащением из внешних источников
+
+// @host localhost:8080
+// @BasePath /
+
+// @securityDefinitions.apikey ApiKeyAuth
+// @in header
+// @name Authorization
 var dbConn *gorm.DB
 
 func main() {
+
 	// Инициализация Redis
 	redisHost := os.Getenv("REDIS_HOST")
 	if redisHost == "" {
@@ -52,12 +68,23 @@ func main() {
 	r.PUT("/people/:id", updatePerson)
 	r.DELETE("/people/:id", deletePerson)
 
+	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	log.Println("Server running on :8080")
 	if err := http.ListenAndServe(":8080", r); err != nil {
 		log.Fatal("Server failed:", err)
 	}
 }
 
+// @Summary Добавить человека
+// @Description Создает новую запись с обогащением данных
+// @Tags people
+// @Accept json
+// @Produce json
+// @Param input body models.Person true "Данные человека"
+// @Success 201 {object} models.Person
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /people [post]
 func createPerson(c *gin.Context) {
 	var person models.Person
 	if err := c.ShouldBindJSON(&person); err != nil {
@@ -78,13 +105,58 @@ func createPerson(c *gin.Context) {
 	c.JSON(http.StatusCreated, person)
 }
 
+// @Summary Получить список людей
+// @Description Возвращает список с возможностью фильтрации и пагинации
+// @Tags people
+// @Accept json
+// @Produce json
+// @Param name query string false "Фильтр по имени"
+// @Param surname query string false "Фильтр по фамилии"
+// @Param age query int false "Фильтр по возрасту"
+// @Param gender query string false "Фильтр по полу"
+// @Param page query int false "Номер страницы" default(1)
+// @Param limit query int false "Лимит записей" default(10)
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} map[string]string
+// @Router /people [get]
 func getPeople(c *gin.Context) {
 	var people []models.Person
-	if err := dbConn.Find(&people).Error; err != nil {
+	query := dbConn.Model(&models.Person{})
+
+	// 1. Фильтрация по query-параметрам
+	if name := c.Query("name"); name != "" {
+		query = query.Where("name ILIKE ?", "%"+name+"%") // Поиск по частичному совпадению
+	}
+	if surname := c.Query("surname"); surname != "" {
+		query = query.Where("surname ILIKE ?", "%"+surname+"%")
+	}
+	if age := c.Query("age"); age != "" {
+		query = query.Where("age = ?", age)
+	}
+	if gender := c.Query("gender"); gender != "" {
+		query = query.Where("gender = ?", gender)
+	}
+
+	// 2. Пагинация
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if page < 1 {
+		page = 1
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	offset := (page - 1) * limit
+
+	// 3. Выполняем запрос
+	if err := query.Offset(offset).Limit(limit).Find(&people).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, people)
+
+	// 4. Возвращаем результат
+	c.JSON(http.StatusOK, gin.H{
+		"data":  people,
+		"page":  page,
+		"limit": limit,
+	})
 }
 
 //Обновление существующей записи
@@ -114,14 +186,22 @@ func updatePerson(c *gin.Context) {
 	c.JSON(http.StatusOK, person)
 }
 
-// Удаление записи по ID
+// @Summary Обновить данные человека
+// @Tags people
+// @Accept json
+// @Produce json
+// @Param id path int true "ID человека"
+// @Param input body models.Person true "Обновленные данные"
+// @Success 200 {object} models.Person
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /people/{id} [put]
 func deletePerson(c *gin.Context) {
 	id := c.Param("id")
 
-	// 1. Пытаемся удалить
 	result := dbConn.Delete(&models.Person{}, id)
 
-	// 2. Проверяем, была ли удалена запись
 	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
 		return
