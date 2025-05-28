@@ -43,7 +43,6 @@ func NewError(errorType ErrorType, code int, message string, details any) ErrorR
 	}
 }
 
-// ValidationErrorDetails детали ошибки валидации
 type ValidationErrorDetails struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
